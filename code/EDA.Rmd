@@ -1,0 +1,140 @@
+---
+title: "Myki data EDA"
+output: html_notebook
+date: 24/7/2018
+---
+
+## Introduction
+
+ Code modified from the "code_to_get_started.R" script provided by the competition
+
+```{r setup}
+
+#install.packages('data.table')
+library(data.table)
+library(tidyverse)
+library(skimr)
+library(gridExtra)
+library(maps)
+
+ScanOnFolderMaster <- '.././Samp_x/ScanOnTransaction'
+ScanOffFolderMaster <- '.././Samp_x/ScanOffTransaction'
+
+```
+
+## Initial Data Inspection
+Check out the data
+```{r allFiles}
+mySamp <- 0
+
+ScanOnFolder <- sub("x", mySamp, ScanOnFolderMaster)
+ScanOffFolder <- sub("x", mySamp, ScanOffFolderMaster)
+
+#list the files
+onFiles <- list.files(ScanOnFolder, recursive = TRUE, full.names = TRUE)
+offFiles <- list.files(ScanOffFolder, recursive = TRUE, full.names = TRUE)
+
+#how many
+allFiles <- union(onFiles, offFiles)
+cat("\nthere are", length(allFiles),'files')
+
+```
+
+
+```{r dt}
+#------------------------------------
+#read in a file and take a look
+#------------------------------------
+myFile <- onFiles[1]
+cmd <- paste0("gzip -dc ", myFile)
+dt <- fread(cmd) # ,nrow=10000)
+
+#these are the column names
+colnames(dt) <- c('Mode','BusinessDate','DateTime','CardID','CardType','VehicleID','ParentRoute','RouteID','StopID')
+
+# dt %>% glimpse(width = 100)
+
+dt <- dt %>% 
+  mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+         DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S")) %>%   # "2015-07-02 13:08:13"
+  glimpse(width = 100)
+
+```
+
+
+
+```{r}
+skim(dt)
+```
+
+Quick plot of each of the numeric fields.  Interestingly, this file has only 4 days of data.
+```{r, warning=FALSE, fig.height=20, fig.width=7}
+
+dt_num_lst <- dt %>% 
+  select_if(is_numeric) %>% 
+  colnames()
+
+dt_plot_lst <- vector("list", length(dt_num_lst))
+
+for (i in seq_along(dt_num_lst)) {
+  # print a histogram
+
+  col_name = dt_num_lst[i]
+  
+  dt_plot <-
+    dt %>%
+    ggplot(aes_string(x = col_name)) +
+    geom_histogram(bins = 30) +
+    labs(title = str_c("Distribution of ", col_name, collapse = ""))
+
+  dt_plot_lst[[i]] <- dt_plot
+  
+}
+
+grid.arrange(grobs = dt_plot_lst, ncol = 1)
+
+
+```
+
+### Questions from the plots  
+
+1. Is there any significance with the stop numbers?  
+  + Maybe could a map plot with colour coding the stop numbers.  
+2. Why is DateTime so lumpy?
+  + Suspect that it is due to the bins that mean that there is a pattern to whether the bin includes multiple peak periods.  
+3. Latitude and longitude plots look reasonable.  
+
+
+```{r}
+aus <- map_data("world2", region = "au")
+
+ggplot(aus %>% filter(between(long, 144.4, 145.6),
+                      between(lat, -38.5, -37.0)), aes(long, lat, group = group)) +
+  geom_polygon() +
+  coord_quickmap()
+
+# aus %>% 
+#   count(group, subregion, sort = TRUE)
+# 
+# ggmap::geocode("AU")
+```
+
+```{r, warning=FALSE, fig.height=10, fig.width=10}
+library(ggmap)
+# citation('ggmap') 
+
+map_melb <- get_map(location = c(144.4, -38.3, 145.6, -37.5), zoom = 9) %>%
+ggmap(alpha = 0.5)
+
+# plot(bt$lat,bt$long,col=factor(bt$CardID),pch=19,main="busy travellers")
+
+stops <- bt %>% 
+  select(StopID, lat, long) %>% 
+  distinct() %>% 
+  glimpse()
+
+map_melb +
+  geom_point(data = stops, aes(x = lat, y = long), size = 200, colour = "red")
+
+```
+
