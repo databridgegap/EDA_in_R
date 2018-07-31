@@ -1,0 +1,217 @@
+---
+title: "List of Myki cards"
+output: html_notebook
+date: 31/7/2018
+---
+
+## Introduction
+
+ Code modified from the "code_to_get_started.R" script provided by the competition.
+ 
+### Objective  
+1.  Random sample of cards.
+  + Proceed through each file and extract the cards and the frequency.
+
+```{r setup}
+
+#install.packages('data.table')
+library(data.table)
+library(tidyverse)
+library(skimr)
+library(gridExtra)
+library(maps)
+
+ScanOnFolderMaster <- '.././Samp_x/ScanOnTransaction'
+ScanOffFolderMaster <- '.././Samp_x/ScanOffTransaction'
+
+```
+
+## Initial Data Inspection
+Check out the data
+```{r allFiles}
+mySamp <- 0
+
+ScanOnFolder <- sub("x", mySamp, ScanOnFolderMaster)
+ScanOffFolder <- sub("x", mySamp, ScanOffFolderMaster)
+
+#list the files
+onFiles <- list.files(ScanOnFolder, recursive = TRUE, full.names = TRUE)
+offFiles <- list.files(ScanOffFolder, recursive = TRUE, full.names = TRUE)
+
+#how many
+allFiles <- union(onFiles, offFiles)
+cat("\nthere are", length(allFiles),'files')
+
+```
+
+```{r cards}
+#------------------------------------
+#read in a file and take a look
+#------------------------------------
+myFile <- onFiles[1]
+cmd <- paste0("gzip -dc ", myFile)
+cards <- fread(cmd, select = c(2, 4, 5)) # ,nrow=10000)
+
+#these are the column names
+colnames(cards) <- c('BusinessDate', 'CardID','CardType')
+
+# dt %>% glimpse(width = 100)
+
+cards <- cards %>% 
+  mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d")) %>%   # "2015-07-02"
+  glimpse(width = 100)
+
+cards %>% 
+  group_by(CardID, CardType) %>% 
+  summarise(bus_date_min = min(BusinessDate),
+            trans_freq = n()) %>%
+  print()
+
+```
+
+OK, lets progress through each of the files and recursively build a list of CardIDs.  I'm assuming that `r 86011 * 316` will be too large to handle.  
+
+```{r}
+# 86011 * 316
+
+# Initialise the receiving tibble.
+cards_all <- tibble(CardID = vector("integer", 0),
+                    CardType = vector("integer", 0),
+                    bus_date_min = as.Date(NA),
+                    trans_freq = vector("integer", 0))
+
+for (fl in seq_along(onFiles)) {
+  #  Import each file one by one and add to the list of CardIDs.
+  
+  # fl = 1
+  cat(fl, ",")
+  
+  myFile <- onFiles[fl]
+  cmd <- paste0("gzip -dc ", myFile)
+  cards <- fread(cmd, select = c(2, 4, 5))
+  
+  #these are the column names
+  colnames(cards) <- c('BusinessDate', 'CardID','CardType')
+  
+  cards <- cards %>% 
+    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"))
+  
+  cards_all_new <- cards %>% 
+    group_by(CardID, CardType) %>% 
+    summarise(bus_date_min = min(BusinessDate),
+              trans_freq = n()) %>%
+    bind_rows(cards_all)
+  
+  cards_all <- cards_all_new %>% 
+    group_by(CardID, CardType) %>% 
+    summarise(bus_date_min = min(bus_date_min),
+              trans_freq = sum(trans_freq, na.rm = TRUE))
+  
+}
+
+cards_all
+
+
+```
+
+**Summary of cards**  
++ There are 1.5M cards.  
++ The card type ranges from 0 to 71.  
++ Dates range from Jul-15 to Jun-18.
+
+```{r}
+# skim(cards_all)
+
+cards_all %>% summary()
+```
+
+```{r}
+
+# Initialise the receiving tibble.
+cards_all_off <- tibble(CardID = vector("integer", 0),
+                    CardType = vector("integer", 0),
+                    bus_date_min = as.Date(NA),
+                    trans_freq = vector("integer", 0))
+
+for (fl in seq_along(offFiles)) {
+  #  Import each file one by one and add to the list of CardIDs.
+  
+  # fl = 1
+  cat(fl, ",")
+  
+  myFile <- offFiles[fl]
+  cmd <- paste0("gzip -dc ", myFile)
+  cards <- fread(cmd, select = c(2, 4, 5))
+  
+  #these are the column names
+  colnames(cards) <- c('BusinessDate', 'CardID','CardType')
+  
+  cards <- cards %>% 
+    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"))
+  
+  cards_all_new <- cards %>% 
+    group_by(CardID, CardType) %>% 
+    summarise(bus_date_min = min(BusinessDate),
+              trans_freq = n()) %>%
+    bind_rows(cards_all_off)
+  
+  cards_all_off <- cards_all_new %>% 
+    group_by(CardID, CardType) %>% 
+    summarise(bus_date_min = min(bus_date_min),
+              trans_freq = sum(trans_freq, na.rm = TRUE))
+  
+}
+
+cards_all_off
+
+```
+
+```{r}
+cards_both_summ <- cards_all %>% 
+  rename(bus_date_on_min = bus_date_min,
+         trans_on_freq = trans_freq) %>% 
+  full_join(cards_all_off %>% rename(bus_date_off_min = bus_date_min,
+                                     trans_off_freq = trans_freq),
+            by = c("CardID", "CardType")) %>% 
+  mutate(trans_both = coalesce(trans_on_freq, 0L) + coalesce(trans_off_freq, 0L)) %>% 
+  glimpse()
+```
+
+
+```{r}
+cards_both_summ %>% 
+  ungroup() %>% 
+  select(trans_on_freq, trans_off_freq) %>% 
+  summarise(on_freq_sum = sum(trans_on_freq, na.rm = TRUE),
+            on_freq_na = sum(is.na(trans_on_freq) | trans_on_freq == 0),
+            off_freq_sum = sum(trans_off_freq, na.rm = TRUE),
+            off_freq_na = sum(is.na(trans_off_freq) | trans_off_freq == 0))
+```
+
+```{r}
+# write_rds(cards_both_summ, "cards_both_summ.rds")
+
+cards_both_summ <- read_rds("cards_both_summ.rds")
+
+```
+
+```{r}
+cards_both_summ %>% 
+  group_by(CardID) %>% 
+  mutate(CardType_num = n()) %>% 
+  ungroup() %>% 
+  arrange(-CardType_num, CardID)
+```
+
+```{r}
+cards_both_summ <- cards_both_summ %>% 
+  ungroup() %>% 
+  group_by(CardID) %>% 
+  summarise(bus_date_on_min = min(bus_date_on_min, na.rm = TRUE),
+            trans_on_freq = sum(trans_on_freq, na.rm = TRUE),
+            bus_date_off_min = min(bus_date_off_min, na.rm = TRUE),
+            trans_off_freq = sum(trans_off_freq, na.rm = TRUE),
+            trans_both = sum(trans_both, na.rm = TRUE))
+```
+
+
