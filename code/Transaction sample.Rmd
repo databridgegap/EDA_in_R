@@ -1,0 +1,152 @@
+---
+title: "Collect transaction samples"
+output: html_notebook
+date: 1/8/2018
+---
+
+## Introduction
+
+The purpose of this notebook is to collect sample Myki transaction.
+
+A prerequisite to running this notebook is the data of Myki cards.
+
+```{r setup}
+
+#install.packages('data.table')
+library(data.table)
+library(tidyverse)
+library(skimr)
+library(gridExtra)
+library(maps)
+
+ScanOnFolderMaster <- '.././Samp_x/ScanOnTransaction'
+ScanOffFolderMaster <- '.././Samp_x/ScanOffTransaction'
+
+# Set the proportion of cards to analyse
+card_samp_sh <- 0.01
+
+trans_col_names <- c('Mode','BusinessDate','DateTime','CardID','CardType','VehicleID','ParentRoute','RouteID','StopID')
+
+```
+
+
+```{r}
+# write_rds(cards_both_summ, "cards_both_summ.rds")
+
+cards_both_summ <- read_rds("cards_both_summ.rds")
+
+cards_both_summ <- cards_both_summ %>% 
+  ungroup() %>% 
+  group_by(CardID) %>% 
+  summarise(bus_date_on_min = min(bus_date_on_min, na.rm = TRUE),
+            trans_on_freq = sum(trans_on_freq, na.rm = TRUE),
+            bus_date_off_min = min(bus_date_off_min, na.rm = TRUE),
+            trans_off_freq = sum(trans_off_freq, na.rm = TRUE),
+            trans_both = sum(trans_both, na.rm = TRUE)) %>% 
+  ungroup()
+
+```
+
+### Pick sample
+
+```{r}
+
+card_samp <- sample_frac(cards_both_summ, size = card_samp_sh, weight = trans_on_freq) %>% 
+  print()
+
+```
+
+```{r}
+cards_both_summ %>% summary()
+```
+
+I  deliberately weighted the sample by the number of touch-on transactions, as opposed to touch-on and touch-off transactions.
+
+I may want to revisit this assumption - are we interested in tracking individual cards or transactions?
+
+```{r}
+card_samp %>% skim(.)
+```
+
+## Pick out the sample transactions
+
+```{r}
+
+# Initialise the receiving tibble.
+card_trans_lst <- vector("list", length(onFiles))
+
+for (fl in seq_along(onFiles)) {
+  #  Import each file one by one and add to the list of CardIDs.
+  
+  # fl = 1
+  cat(fl, ",")
+  
+  myFile <- onFiles[fl]
+  cmd <- paste0("gzip -dc ", myFile)
+  card_trans <- fread(cmd)
+  
+  #these are the column names
+  colnames(card_trans) <- trans_col_names
+  
+  card_trans <- card_trans %>% 
+    inner_join(card_samp %>% select(CardID),
+               by = "CardID")
+  
+  card_trans <- card_trans %>% 
+    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+           DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
+  
+  card_trans_lst[[fl]] <- card_trans
+  
+}
+
+trans_on_samp <- bind_rows(card_trans_lst)
+
+
+```
+
+```{r}
+
+# Initialise the receiving tibble.
+card_trans_lst <- vector("list", length(offFiles))
+
+for (fl in seq_along(offFiles)) {
+  #  Import each file one by one and add to the list of CardIDs.
+  
+  # fl = 1
+  cat(fl, ",")
+  
+  myFile <- offFiles[fl]
+  cmd <- paste0("gzip -dc ", myFile)
+  card_trans <- fread(cmd)
+  
+  #these are the column names
+  colnames(card_trans) <- trans_col_names
+  
+  card_trans <- card_trans %>% 
+    inner_join(card_samp %>% select(CardID),
+               by = "CardID")
+  
+  # card_trans <- card_trans %>% 
+  #   mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+  #          DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
+  
+  card_trans_lst[[fl]] <- card_trans
+  
+}
+
+trans_off_samp <- bind_rows(card_trans_lst) %>% 
+    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+           DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
+
+
+```
+
+```{r}
+write_rds(trans_on_samp, "trans_on_samp.rds")
+
+write_rds(trans_off_samp, "trans_off_samp.rds")
+
+```
+
+
