@@ -1,0 +1,95 @@
+---
+title: "Extra tables"
+output: html_notebook
+---
+
+## Introduction
+This notebook is to display the extra datasets available for the datathon.
+
+```{r setup}
+
+#install.packages('data.table')
+library(data.table)
+library(tidyverse)
+library(skimr)
+library(gridExtra)
+library(maps)
+library(lubridate)
+
+ScanOnFolderMaster <- '.././Samp_x/ScanOnTransaction'
+ScanOffFolderMaster <- '.././Samp_x/ScanOffTransaction'
+
+stop_locs_flnm <- '.././stop_locations.txt'
+stop_locs_fld_nm_file <- '.././Header_FieldDataTypes_DimStopLocation.txt'
+
+```
+
+### Stop locations
+
+```{r}
+
+# Vector of the column headings
+stop_locs_fld_nm <- read_lines(stop_locs_fld_nm_file, skip = 2) %>% 
+  str_replace_all(., c("\\t\\[" = "",
+                       "\\].*" = "")) %>%   # i.e remove the first closing ] and everything after
+  head(., -1)  # drop the last element
+
+
+stop_locs_raw <- read_delim(stop_locs_flnm, delim = "|",
+                            col_names = stop_locs_fld_nm,
+                            col_types = cols(
+                              StopLocationID = col_integer(),
+                              StopNameShort = col_character(),
+                              StopNameLong = col_character(),
+                              StopType = col_character(),
+                              SuburbName = col_character(),
+                              PostCode = col_integer(),
+                              RegionName = col_character(),
+                              LocalGovernmentArea = col_character(),
+                              StatDivision = col_character(),
+                              GPSLat = col_double(),
+                              GPSLong = col_double()
+                            )) %>% 
+  glimpse(width = 100)
+
+```
+
+Interesting... the stop locations stop at 52126, even though our data has stops around 64404!  
+
+```{r}
+stop_locs_raw %>% 
+  skim(.)
+```
+
+```{r}
+stop_locs_raw %>% 
+  filter(StopLocationID == 7090) %>% 
+  glimpse()
+```
+
+What are the region names?
+
+```{r}
+stop_locs_raw %>% 
+  count(RegionName, sort = TRUE)
+```
+
+```{r}
+stop_locs_raw %>% 
+  # filter(RegionName == "Melbourne") %>% 
+  # count(SuburbName, sort = TRUE)
+  filter(SuburbName == "Melbourne City") %>%
+  count(StopType, sort = TRUE)
+  # select(StopNameLong)
+```
+
+Just checking - there aren't any duplicate stops!  Phew!
+```{r}
+stop_locs_raw %>% 
+  group_by(StopLocationID) %>% 
+  mutate(stop_n = n()) %>% 
+  filter(stop_n > 1) %>% 
+  arrange(-stop_n, StopLocationID) %>% 
+  select(stop_n, everything())
+```
+

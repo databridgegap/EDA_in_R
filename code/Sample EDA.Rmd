@@ -1,0 +1,281 @@
+---
+title: "Sample EDA"
+output:
+  html_document:
+    df_print: paged
+date: "2/8/2018"
+---
+
+## Introduction  
+
+The objective of this notebook is to understand the sample data better.
+
+Questions:  
+* What is the spread of cards who touch on and touch off?  
+* By mode?  
+* By distance traveled?  
+* By geographic distance?  
+* Is there any pattern of repeatability of trips?  
+* What is the variation of repeat trips?  
+* What is the variation on trip durations?  
+* For those who take repeat trips, what is the variability of trip durations?  
+
+
+```{r setup}
+
+#install.packages('data.table')
+library(data.table)
+library(tidyverse)
+library(skimr)
+library(gridExtra)
+library(maps)
+library(lubridate)
+library(hexbin)
+library(geosphere)
+
+trans_on_samp <- read_rds("trans_on_samp.rds")
+
+trans_off_samp <- read_rds("trans_off_samp.rds")
+
+trip_len_max_ass <- 3       # Assumed maximum trip length in hours
+
+```
+
+```{r trans_all_samp}
+trans_all_samp <- trans_on_samp %>% 
+  select(CardID, BusinessDate, DateTime, Mode, everything()) %>% 
+  mutate(transact = "on") %>% 
+  bind_rows(trans_off_samp %>% 
+              # select(CardID, BusinessDate, DateTime, Mode, everything()) %>% 
+              mutate(transact = "off"))
+
+```
+
+
+## Spread of cards who touch on and touch off
+
+```{r trip_all}
+
+trip_all <- trans_all_samp %>% 
+  group_by(CardID) %>% 
+  arrange(CardID, DateTime) %>% 
+  mutate(DateTime_next = lead(DateTime),
+         Mode_next = lead(Mode),
+         VehicleID_next = lead(VehicleID),
+         RouteID_next = lead(RouteID),
+         StopID_next = lead(StopID),
+         transact_next = lead(transact),
+         trans_intvl_h = (DateTime_next - DateTime) / dhours(1),
+         trip_assume = if_else((trans_intvl_h < trip_len_max_ass &
+                    transact == "on" & transact_next == "off" &
+                    Mode == Mode_next), "on-off", as.character(NA))) %>% 
+  ungroup() %>% 
+  glimpse(width = 100)
+
+```
+
+OK, the assumed method for classifying a trip seem to hold.  
++ There ones with the shortest intervals involved different stop IDs, different modes or different vehicle IDs.
+
+```{r}
+trip_all %>% 
+  filter(is.na(trip_assume),
+         transact == "on",
+         transact_next == "off") %>% 
+  mutate(trans_intvl_m = round(trans_intvl_h * 60, digits = 1)) %>%
+  select(CardID, trans_intvl_m, transact, transact_next, Mode, Mode_next, StopID, StopID_next, 
+         VehicleID, VehicleID_next, DateTime, DateTime_next) %>% 
+  arrange(trans_intvl_m)
+
+```
+
+### Variation in the trip durations
+
+Trip journey durations have been consistent over the survey horizon.  
+
+```{r}
+trip_all %>% 
+  ungroup() %>% 
+  filter(!is.na(trip_assume)) %>% 
+  mutate(cal_year = factor(year(BusinessDate)),
+         finyear = factor(year(round_date(BusinessDate + 2, unit = "year"))),
+         Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram")),
+         trans_intvl_m = trans_intvl_h * 60) %>% 
+  select(Mode, CardType, trans_intvl_m, trip_assume, finyear) %>% 
+  ggplot(., aes(x = finyear, y = trans_intvl_m)) +
+  geom_boxplot() +
+  facet_wrap(. ~ Mode) +
+  labs(title = "Trip journey durations have been consistent over the survey horizon",
+       x = "Financial year",
+       y = "Minutes elapsed between touching on and touching off")
+
+```
+
+
+
+```{r}
+trip_all %>% 
+  # filter(StopID < 60000) %>% 
+  mutate(Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram"))) %>% 
+  group_by(Mode, StopID) %>% 
+  summarise(StopID_n = n()) %>% 
+  inner_join(stop_locs_raw %>% select(StopLocationID, StopNameLong, StopType),
+             by = c("StopID" = "StopLocationID")) %>% 
+  top_n(., 10, StopID_n) %>% 
+  select(Mode, StopID, StopNameLong, StopType, StopID_n) %>% 
+  ungroup() %>% 
+  arrange(Mode, -StopID_n) %>% 
+  # ungroup() %>% 
+  ggplot(aes(x = fct_reorder(StopNameLong, StopID_n) , y = StopID_n, fill = Mode)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  facet_grid(Mode ~ ., scales = "free_y", switch = "y") +
+  labs(title = "Top 10 identifiable stops",
+       subtitle = "limited to Stop IDs listed in stop_locations.txt",
+       y = "number of touch-ons in sample data",
+       x = "Stop Name")
+
+```
+
+The majority of StopID for Mode 3 (trams) don't seem to have a join in stop_locations.txt.  
+
+My inference is that the tram data is limited.
+
+```{r}
+trip_all %>% 
+  filter(StopID < 60000,
+         Mode == 3) %>% 
+  group_by(Mode, StopID) %>% 
+  summarise(StopID_n = n()) %>% 
+  arrange(Mode, -StopID_n) %>% 
+  left_join(stop_locs_raw %>% select(StopLocationID, StopNameLong, StopType),
+             by = c("StopID" = "StopLocationID")) %>% 
+  top_n(., 300, StopID_n) %>% 
+  # select(Mode, StopID, StopNameLong, StopType, StopID_n)
+  count(StopType, sort = TRUE)
+
+```
+
+```{r}
+trip_all %>% 
+  ungroup() %>% 
+  filter(transact == "on") %>% 
+  mutate(finyear = factor(year(round_date(BusinessDate + 2, unit = "year"))),
+         Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram")),
+         touch_off = !is.na(trip_assume),
+         trans_intvl_m = trans_intvl_h * 60) %>% 
+  select(Mode, CardType, trans_intvl_m, trip_assume, finyear, touch_off) %>% 
+  ggplot(., aes(x = finyear, fill = touch_off)) +
+  geom_bar() +
+  facet_wrap(. ~ Mode) +
+  labs(title = "Touch-ons have dropped slightly for all modes in FY18.",
+       subtitle = "Tram customers are much less likely to touch-off compared to other modes",
+       x = "Financial year",
+       y = "Number of touch-ons")
+
+```
+
+The degree of variation in touch-ons from year to year is surprising.  
++ There is a pronounced dip across all modes around the middle of the year (mid-May to mid-July).
+
+```{r}
+trip_all %>% 
+  ungroup() %>% 
+  # slice(., 1:200) %>%
+  filter(transact == "on") %>% 
+  mutate(finyear = factor(year(round_date(BusinessDate + 2, unit = "year"))),
+         Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram")),
+         month_abbr = factor(month(BusinessDate, label = TRUE), 
+                            levels = c("Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun")),
+         week_grp = factor(((week(BusinessDate + 2 + 182)) %/% 4) + 1),
+         BusDate_6m = BusinessDate + 2 + 182,
+         touch_off = !is.na(trip_assume),
+         trans_intvl_m = trans_intvl_h * 60) %>% 
+  select(Mode, CardType, trans_intvl_m, trip_assume, finyear, touch_off, month_abbr, BusinessDate, week_grp, BusDate_6m) %>% 
+  ggplot(., aes(fill = finyear, x = week_grp)) +
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = scales::comma) +
+  facet_grid(Mode ~ ., scales = "free_y", switch = "y") +
+  labs(title = "Touch-ons have dropped slightly for all modes in FY18, particularly in the H2 of FY",
+       subtitle = "Could this relate to the level crossing removal work?",
+       x = "4-week period of Fin Year",
+       y = "Number of touch-ons")
+
+```
+
+## Review of Distance Travelled.
+
+Will limit this analysis to buses and trains due to the very limited nature of tram data.
+
+
+```{r}
+
+my_breaks <- c(1, 10, 100, 1000, 10000, 10^5, 10^6)
+
+trip_all %>% 
+  ungroup() %>% 
+  filter(!is.na(trip_assume),
+         Mode != 3) %>% 
+  mutate(Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram"))) %>% 
+  group_by(CardID, Mode, StopID, StopID_next) %>% 
+  summarise(trips = n(),
+            bus_date_from = min(BusinessDate, na.rm = TRUE),
+            bus_date_to = max(BusinessDate, na.rm = TRUE)) %>%
+  group_by(CardID) %>% 
+  mutate(trips_sh = trips / sum(trips),
+         bus_date_range = (bus_date_to - bus_date_from) / ddays(1)) %>% 
+  # arrange(CardID, -trips)
+  ggplot(aes(x = bus_date_range, y = trips)) +
+  geom_hex(bins = 20) +
+  geom_abline(aes(intercept = 0, slope = 1), linetype = 3, colour = "grey") +
+  geom_abline(aes(intercept = 0, slope = 5/7), linetype = 2, alpha = 0.5) +
+  scale_fill_gradient(name = "count", trans = "log",
+                      breaks = my_breaks, labels = scales::comma(my_breaks)) +
+  labs(title = "Distribution of the number of repeated journeys over 3 year period",
+       subtitle = "Dotted line: 7 trips/wk; dashed line: 5 trips/wk",
+       x = "Days between the first and last journey for the card",
+       y = "Number of trips in that time")
+         
+```
+
+### Calculate distance travelled
+
+Will use the geosphere package to calculate distances.
+
+```{r trip_jrnys}
+
+trip_jrnys <- 
+  trip_all %>% 
+  ungroup() %>% 
+  filter(!is.na(trip_assume),
+         Mode != 3) %>% 
+  mutate(finyear = factor(year(round_date(BusinessDate + 2, unit = "year"))),
+         Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram"))) %>% 
+  inner_join(stop_locs_raw %>% select(StopLocationID, GPSLat, GPSLong, SuburbName),
+             by = c("StopID" = "StopLocationID")) %>% 
+  rename(lat_from = GPSLat, lon_from = GPSLong, suburb_from = SuburbName) %>% 
+  inner_join(stop_locs_raw %>% select(StopLocationID, GPSLat, GPSLong, SuburbName),
+             by = c("StopID_next" = "StopLocationID")) %>% 
+  rename(lat_to = GPSLat, lon_to = GPSLong, suburb_to = SuburbName) %>%
+  mutate(trip_dist = distHaversine(cbind(lon_from, lat_from), cbind(lon_to, lat_to))) %>%
+  glimpse()
+```
+
+What is the spread of distances by year and mode?  
+
+```{r, fig.height=8, fig.width=7}
+
+trip_jrnys %>% 
+  select(finyear, Mode, trip_dist) %>% 
+  filter(trip_dist >= 1) %>% 
+  ggplot(aes(x = finyear, y = trip_dist)) +
+  geom_boxplot() +
+  scale_y_log10(breaks = c(map_dbl(0:5, ~ 10 ^ .x)), labels = scales::comma) +
+  facet_grid(Mode ~ .) +
+  labs(title = "Travel distances have remained steady over the 3 years",
+       subtitle = "There are significant short distances for bus travel",
+       x = "Financial year",
+       y = "Distance between start and end in metres")
+
+```
+
