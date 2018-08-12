@@ -29,6 +29,20 @@ trans_col_names <- c('Mode','BusinessDate','DateTime','CardID','CardType','Vehic
 
 ```
 
+## Load list of files
+Check out the data
+```{r allFiles}
+
+mySamp <- 0
+
+ScanOnFolder <- sub("x", mySamp, ScanOnFolderMaster)
+ScanOffFolder <- sub("x", mySamp, ScanOffFolderMaster)
+
+#list the files
+onFiles <- list.files(ScanOnFolder, recursive = TRUE, full.names = TRUE)
+offFiles <- list.files(ScanOffFolder, recursive = TRUE, full.names = TRUE)
+
+```
 
 ```{r}
 # write_rds(cards_both_summ, "cards_both_summ.rds")
@@ -50,6 +64,8 @@ cards_both_summ <- cards_both_summ %>%
 ### Pick sample
 
 ```{r}
+
+set.seed(1234)
 
 card_samp <- sample_frac(cards_both_summ, size = card_samp_sh, weight = trans_on_freq) %>% 
   print()
@@ -92,15 +108,17 @@ for (fl in seq_along(onFiles)) {
     inner_join(card_samp %>% select(CardID),
                by = "CardID")
   
-  card_trans <- card_trans %>% 
-    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
-           DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
+  # card_trans <- card_trans %>% 
+  #   mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+  #          DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
   
   card_trans_lst[[fl]] <- card_trans
   
 }
 
-trans_on_samp <- bind_rows(card_trans_lst)
+trans_on_samp <- bind_rows(card_trans_lst) %>% 
+    mutate(BusinessDate = parse_date(BusinessDate, "%Y-%m-%d"),
+           DateTime = parse_datetime(DateTime, "%Y-%m-%d %H:%M:%S"))   # "2015-07-02 13:08:13"
 
 
 ```

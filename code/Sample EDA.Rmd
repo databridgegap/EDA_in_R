@@ -48,8 +48,14 @@ trans_all_samp <- trans_on_samp %>%
   bind_rows(trans_off_samp %>% 
               # select(CardID, BusinessDate, DateTime, Mode, everything()) %>% 
               mutate(transact = "off"))
+# 
+# trans_all_samp %>% glimpse()
+# 
+# trans_all_samp %>% str()
 
 ```
+
+
 
 
 ## Spread of cards who touch on and touch off
@@ -57,9 +63,12 @@ trans_all_samp <- trans_on_samp %>%
 ```{r trip_all}
 
 trip_all <- trans_all_samp %>% 
+  # slice(1:10000) %>% 
   group_by(CardID) %>% 
-  arrange(CardID, DateTime) %>% 
-  mutate(DateTime_next = lead(DateTime),
+  arrange(CardID, DateTime) %>%
+  # str()
+  mutate(Mode = factor(Mode, levels = 1:3, labels = c("Bus", "Train", "Tram")),
+         DateTime_next = lead(DateTime),
          Mode_next = lead(Mode),
          VehicleID_next = lead(VehicleID),
          RouteID_next = lead(RouteID),
@@ -68,7 +77,10 @@ trip_all <- trans_all_samp %>%
          trans_intvl_h = (DateTime_next - DateTime) / dhours(1),
          trip_assume = if_else((trans_intvl_h < trip_len_max_ass &
                     transact == "on" & transact_next == "off" &
-                    Mode == Mode_next), "on-off", as.character(NA))) %>% 
+                    Mode == Mode_next), "on-off", as.character(NA)),
+         finyear = year(round_date(BusinessDate + 2, unit = "year")),
+         StopID = as.character(StopID)) %>% 
+# str()
   ungroup() %>% 
   glimpse(width = 100)
 
@@ -277,5 +289,91 @@ trip_jrnys %>%
        x = "Financial year",
        y = "Distance between start and end in metres")
 
+```
+
+### Transactions by Card Type
+
+```{r}
+trip_all %>% 
+  mutate(CardType = as.character(CardType)) %>%
+  left_join(card_type_raw %>% select(Card_SubType_ID, Card_SubType_Desc),
+            by = c("CardType" = "Card_SubType_ID")) %>% 
+  glimpse()
+```
+
+```{r, fig.width=7, fig.height=10}
+trip_all %>% 
+  # slice(1:10000) %>% 
+  mutate(CardType = as.character(CardType)) %>%
+  left_join(card_type_raw %>% select(Card_SubType_ID, Card_SubType_Desc),
+            by = c("CardType" = "Card_SubType_ID")) %>% 
+  group_by(Card_SubType_Desc) %>% 
+  mutate(card_type_n = n()) %>% 
+  group_by(Card_SubType_Desc, card_type_n, Mode) %>% 
+  summarise(trans_n = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder(Card_SubType_Desc, trans_n), fill = Mode, y = trans_n)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::comma(card_type_n), hjust = 0, y = 10000), size = 2.5, alpha = 0.3, nudge_y = 10000) +
+  scale_y_continuous(labels = scales::comma, position = "right") +
+  labs(title = "Total transactions by card type over 3 years",
+       y = "number of transactions",
+       x = "card type") +
+  coord_flip()
+```
+
+```{r, fig.width=7, fig.height=10}
+trip_all %>% 
+  # slice(1:10000) %>% 
+  mutate(CardType = as.character(CardType)) %>%
+  left_join(card_type_raw %>% select(Card_SubType_ID, Card_SubType_Desc),
+            by = c("CardType" = "Card_SubType_ID")) %>% 
+  group_by(Card_SubType_Desc) %>% 
+  mutate(card_type_n = n()) %>% 
+  group_by(Card_SubType_Desc, card_type_n, Mode) %>% 
+  summarise(trans_n = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder(Card_SubType_Desc, trans_n), fill = Mode, y = trans_n)) +
+  geom_bar(stat = "identity", position = "fill") +
+  geom_text(aes(label = scales::comma(card_type_n), hjust = 0, y = 0.1), size = 2.5, alpha = 0.3) +
+  scale_y_continuous(labels = scales::percent, position = "right") +
+  labs(title = "Total transactions by card type over 3 years",
+       y = "share of transactions",
+       x = "card type") +
+  coord_flip()
+```
+
+The range of trip distances by card type mostly appears consistent.
+```{r, fig.width=7, fig.height=10}
+trip_all %>% 
+  filter(!is.na(trip_assume),
+         Mode != "Tram") %>% 
+  group_by(CardType) %>% 
+  mutate(card_type_n = n()) %>% 
+  ungroup() %>% 
+  # slice(1:100000) %>%
+  mutate(finyear = factor(year(round_date(BusinessDate + 2, unit = "year"))),
+         StopID = parse_integer(StopID),
+         CardType = as.character(CardType)) %>% 
+  inner_join(stop_locs_raw %>% select(StopLocationID, GPSLat, GPSLong, SuburbName),
+             by = c("StopID" = "StopLocationID")) %>% 
+  rename(lat_from = GPSLat, lon_from = GPSLong, suburb_from = SuburbName) %>% 
+  inner_join(stop_locs_raw %>% select(StopLocationID, GPSLat, GPSLong, SuburbName),
+             by = c("StopID_next" = "StopLocationID")) %>% 
+  rename(lat_to = GPSLat, lon_to = GPSLong, suburb_to = SuburbName) %>%
+  mutate(trip_dist = distHaversine(cbind(lon_from, lat_from), cbind(lon_to, lat_to)) / 10^3) %>%
+  filter(trip_dist > 0) %>% 
+  left_join(card_type_raw %>% select(Card_SubType_ID, Card_SubType_Desc),
+            by = c("CardType" = "Card_SubType_ID")) %>%
+  ggplot(aes(x = fct_reorder(Card_SubType_Desc, card_type_n), y = trip_dist, colour = Mode)) +
+  geom_boxplot(outlier.size = 1, show.legend = FALSE) +
+  facet_grid(. ~ Mode, scales = "free_y") +
+  labs(title = "Range of distances travelled",
+       subtitle = "Trams excluded due to incomplete trip information",
+       y = "Distance in km",
+       x = "Card type") +
+  scale_y_log10(breaks = 10 ^ (-1:2)) +
+  coord_flip()
+  
 ```
 

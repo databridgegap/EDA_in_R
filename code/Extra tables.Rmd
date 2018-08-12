@@ -22,6 +22,9 @@ ScanOffFolderMaster <- '.././Samp_x/ScanOffTransaction'
 stop_locs_flnm <- '.././stop_locations.txt'
 stop_locs_fld_nm_file <- '.././Header_FieldDataTypes_DimStopLocation.txt'
 
+card_types_flnm <- '.././card_types.txt'
+card_types_fld_nm_file <- '.././Header_FieldDataTypes_dim_Card_Subtype.txt'
+
 ```
 
 ### Stop locations
@@ -91,5 +94,35 @@ stop_locs_raw %>%
   filter(stop_n > 1) %>% 
   arrange(-stop_n, StopLocationID) %>% 
   select(stop_n, everything())
+```
+
+### Card types
+
+```{r}
+
+# Vector of the column headings
+card_types_fld_nm <- read_lines(card_types_fld_nm_file, skip = 2) %>% 
+  str_replace_all(., c("\\t\\[" = "",
+                       "\\].*" = "")) %>%   # i.e remove the first closing ] and everything after
+  head(., -1)  # drop the last element
+
+
+card_type_raw <- read_delim(card_types_flnm, delim = "|",
+                            col_names = card_types_fld_nm,
+                            col_types = cols(
+                              .default = col_character()
+                            )) %>% 
+  glimpse(width = 100)
+
+```
+
+```{r}
+card_type_raw %>% 
+  ggplot(aes(x = MI_Card_Group, y = Concession_Type)) +
+  geom_count() +
+  facet_grid(Payment_Type ~ Fare_Type, drop = TRUE) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  scale_size(name = "Num ticket types")
+
 ```
 
